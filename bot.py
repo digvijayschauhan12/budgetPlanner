@@ -92,27 +92,36 @@ Be conversational, use ₹ symbol, and reply in Hindi/Hinglish if asked in that 
 
 def parse_expense(message_text):
     """Use Claude to parse expense from message."""
-    response = claude_client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=200,
-        system=PARSING_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": message_text}]
-    )
     try:
-        return json.loads(response.content[0].text)
-    except:
+        response = claude_client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=200,
+            system=PARSING_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": message_text}]
+        )
+        text = response.content[0].text
+        print(f"[Claude Response] {text}")
+        return json.loads(text)
+    except Exception as e:
+        print(f"[Parse Error] {e}")
         return {"is_expense": False}
 
 def get_analysis(question, sheet_data):
     """Use Claude to analyze expenses and answer questions."""
-    context = "Recent expense data:\n" + json.dumps(sheet_data, indent=2, ensure_ascii=False)
-    response = claude_client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=500,
-        system=ANALYSIS_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": f"{context}\n\nQuestion: {question}"}]
-    )
-    return response.content[0].text
+    try:
+        context = "Recent expense data:\n" + json.dumps(sheet_data, indent=2, ensure_ascii=False)
+        response = claude_client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=500,
+            system=ANALYSIS_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": f"{context}\n\nQuestion: {question}"}]
+        )
+        result = response.content[0].text
+        print(f"[Analysis Response] {result[:100]}...")
+        return result
+    except Exception as e:
+        print(f"[Analysis Error] {e}")
+        raise
 
 def log_to_sheets(parsed_expense):
     """Log parsed expense to Google Sheets."""
