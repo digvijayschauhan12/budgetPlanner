@@ -231,6 +231,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parsed = parse_expense(message_text)
     print(f"[PARSED] Result: {parsed}")
 
+    # Handle multiple expenses (list) or single expense (dict)
+    if isinstance(parsed, list):
+        print(f"[MULTIPLE] Found {len(parsed)} expenses")
+        for expense in parsed:
+            if expense.get("person") == "Both" and not any(name.lower() in message_text.lower() for name in ['mimansa', 'digvijay']):
+                await update.message.reply_text(f"Who paid for '{expense.get('description', expense.get('category'))}' - Mimansa, Digvijay, or Both?")
+                if user_id not in context.user_data:
+                    context.user_data[user_id] = {}
+                context.user_data[user_id]['pending_expense'] = expense
+                return
+            await log_and_confirm(update, expense)
+        return
+
     if not parsed.get("is_expense"):
         # Try to answer as a question
         try:
