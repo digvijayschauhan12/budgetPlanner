@@ -1,0 +1,10 @@
+.env
+.env.local
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.vscode/
+.idea/
+*.swp
+*.swo
