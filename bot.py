@@ -32,7 +32,7 @@ def get_sheet():
 
 # System prompt for Claude
 PARSING_SYSTEM_PROMPT = """You are an expense parser for an Indian couple (Mimansa and Digvijay).
-Extract expense information from messages in English/Hinglish and return JSON.
+Extract expense information from messages in English/Hinglish and return ONLY valid JSON.
 
 PERSONS: Mimansa, Digvijay, Both (default if no name mentioned)
 
@@ -42,26 +42,40 @@ Dining Out, Entertainment, Healthcare, Shopping, Education, Miscellaneous, SIP, 
 
 PAYMENT METHODS: Cash, Credit Card, UPI, Bank Transfer (default: UPI)
 
-HINGLISH MAPPINGS:
+HINGLISH CATEGORY MAPPINGS:
 - sabzi/kirana/vegetables → Groceries
-- petrol/fuel/diesel/cab → Transport
-- khana/bhojan/dinner/lunch/zomato/swiggy/blinkit → Dining Out
+- petrol/fuel/diesel/cab/driving → Transport
+- khana/bhojan/dinner/lunch/zomato/swiggy/blinkit/khane → Dining Out
 - bijli/light bill/wifi/internet → Utilities
 - dawai/medicine/hospital/doctor → Healthcare
 - SIP/mutual fund/investment → SIP
 - CC bill/credit card bill → CC Payment
+- emi → EMI
+- insurance → Insurance
+- rent/bhada → Rent
+- subscription → Subscriptions
+- shopping/kapde/khareed → Shopping
+- entertainment/movie/games → Entertainment
+- salary/payment → Salary
+- loan → Education Loan
+
+EXAMPLES:
+- "rent 35000" → {person: "Both", category: "Rent", amount: 35000, description: "", payment_method: "UPI", is_expense: true}
+- "mimansa groceries 450 bigbasket" → {person: "Mimansa", category: "Groceries", amount: 450, description: "bigbasket", payment_method: "UPI", is_expense: true}
+- "digvijay petrol 1200 pump" → {person: "Digvijay", category: "Transport", amount: 1200, description: "pump", payment_method: "UPI", is_expense: true}
+- "dinner 800" → {person: "Both", category: "Dining Out", amount: 800, description: "", payment_method: "UPI", is_expense: true}
 
 RESPONSE FORMAT (ONLY return JSON, no other text):
 {
     "person": "Mimansa|Digvijay|Both",
     "category": "Category Name",
-    "amount": 450,
-    "description": "bigbasket",
+    "amount": number,
+    "description": "description or empty string",
     "payment_method": "UPI|Cash|Credit Card|Bank Transfer",
     "is_expense": true
 }
 
-If you cannot determine if it's an expense or if something is invalid, set is_expense to false."""
+Always set is_expense to true if you can identify an amount and category, even if format is informal."""
 
 ANALYSIS_SYSTEM_PROMPT = """You are a financial assistant for Mimansa and Digvijay (Indian couple).
 Analyze their expenses from the provided data and answer questions conversationally.
