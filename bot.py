@@ -121,7 +121,8 @@ def log_to_sheets(parsed_expense):
         parsed_expense.get("payment_method", "UPI"),
         "",
         parsed_expense.get("person", "Both"),
-        month_str
+        month_str,
+        "No"  # Synced column - marked as "No" initially
     ]
     sheet.append_row(row)
     return row
