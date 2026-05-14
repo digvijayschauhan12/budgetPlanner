@@ -8,6 +8,8 @@ from telegram.request import HTTPXRequest
 from anthropic import Anthropic
 import gspread
 from google.oauth2.service_account import Credentials
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 load_dotenv()
 
@@ -123,6 +125,75 @@ def log_to_sheets(parsed_expense):
     ]
     sheet.append_row(row)
     return row
+
+def sync_to_excel():
+    """Sync Google Sheets data to Excel file in OneDrive."""
+    try:
+        # Get data from Google Sheets
+        sheet = get_sheet()
+        headers = sheet.row_values(1)
+        all_rows = sheet.get_all_records()
+
+        # Create Excel workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Expenses"
+
+        # Add headers with formatting
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+
+        for col_idx, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+
+        # Add data rows
+        for row_idx, record in enumerate(all_rows, 2):
+            for col_idx, header in enumerate(headers, 1):
+                value = record.get(header, "")
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell.border = border
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+
+                # Format amount column
+                if header == "Amount (₹)" and value:
+                    try:
+                        cell.value = float(value)
+                        cell.number_format = '₹#,##0.00'
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
+                    except:
+                        pass
+
+        # Auto-adjust column widths
+        for col_idx, header in enumerate(headers, 1):
+            max_length = len(str(header))
+            for row in ws.iter_rows(min_row=2, max_row=len(all_rows)+1, min_col=col_idx, max_col=col_idx):
+                try:
+                    if len(str(row[0].value)) > max_length:
+                        max_length = len(str(row[0].value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[chr(64 + col_idx)].width = adjusted_width
+
+        # Save to OneDrive
+        onedrive_path = "/Users/digvijaychauhan/OneDrive/Budget Planner.xlsx"
+        wb.save(onedrive_path)
+        return True, f"✅ Synced! {len(all_rows)} expenses → Excel"
+    except Exception as e:
+        print(f"[EXCEL SYNC ERROR] {e}")
+        import traceback
+        traceback.print_exc()
+        return False, f"❌ Sync failed: {str(e)}"
 
 async def log_and_confirm(update: Update, parsed_expense):
     """Log expense and send confirmation."""
@@ -283,6 +354,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /delete - Remove last expense
 /edit <field> <value> - Edit last expense
 /categories - List all categories
+/sync - Sync to Excel (OneDrive)
 /help - This message
 
 **Ask questions:**
@@ -454,6 +526,18 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show help."""
     await start(update, context)
 
+async def sync_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sync Google Sheets to Excel on OneDrive."""
+    try:
+        await update.message.reply_text("🔄 Syncing to Excel...")
+        success, message = sync_to_excel()
+        if success:
+            await update.message.reply_text(message)
+        else:
+            await update.message.reply_text(message)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
 def main():
     request = HTTPXRequest(connect_timeout=30, read_timeout=30, write_timeout=30)
     app = Application.builder().token(TELEGRAM_TOKEN).request(request).build()
@@ -465,6 +549,7 @@ def main():
     app.add_handler(CommandHandler("delete", delete_cmd))
     app.add_handler(CommandHandler("edit", edit_cmd))
     app.add_handler(CommandHandler("categories", categories))
+    app.add_handler(CommandHandler("sync", sync_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
