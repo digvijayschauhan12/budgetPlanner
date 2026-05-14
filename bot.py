@@ -127,7 +127,9 @@ def log_to_sheets(parsed_expense):
 async def log_and_confirm(update: Update, parsed_expense):
     """Log expense and send confirmation."""
     try:
+        print(f"[LOGGING] Saving to sheets: {parsed_expense}")
         log_to_sheets(parsed_expense)
+        print(f"[SUCCESS] Logged expense")
         confirmation = f"""✅ Logged!
 👤 {parsed_expense.get('person', 'Both')}
 🏷️ {parsed_expense.get('category', 'Miscellaneous')}
@@ -142,6 +144,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages."""
     message_text = update.message.text
     user_id = update.effective_user.id
+    print(f"\n[MESSAGE] User {user_id}: '{message_text}'")
 
     # Handle pending delete confirmation
     if user_id in context.user_data and context.user_data[user_id].get('pending_delete'):
@@ -221,7 +224,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     # Parse as expense
+    print(f"[PARSING] Starting parse...")
     parsed = parse_expense(message_text)
+    print(f"[PARSED] Result: {parsed}")
     await update.message.reply_text(f"[DEBUG] Parsed: {parsed}")
 
     if not parsed.get("is_expense"):
