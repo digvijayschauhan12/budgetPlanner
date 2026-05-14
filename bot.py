@@ -4,6 +4,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.request import HTTPXRequest
 from anthropic import Anthropic
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -15,22 +16,31 @@ CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 
-# Initialize Claude client
 claude_client = Anthropic(api_key=CLAUDE_API_KEY)
 
-# Google Sheets setup
+VALID_CATEGORIES = [
+    "Salary", "Rent", "EMI", "Education Loan", "Credit Card", "Insurance",
+    "Subscriptions", "Groceries", "Utilities", "Transport", "Dining Out",
+    "Entertainment", "Healthcare", "Shopping", "Education", "Miscellaneous", "SIP", "CC Payment"
+]
+
+MONTHLY_BUDGETS = {
+    "Rent": 35000, "EMI": 40000, "Education Loan": 40000, "Credit Card": 15000,
+    "Insurance": 5000, "Subscriptions": 2000, "Groceries": 15000, "Utilities": 5000,
+    "Transport": 8000, "Dining Out": 5000, "Entertainment": 5000, "Healthcare": 3000,
+    "Shopping": 5000, "Education": 3000, "Miscellaneous": 3000, "SIP": 16000
+}
+
 def get_sheets_client():
     creds_dict = json.loads(GOOGLE_CREDS_JSON)
     scope = ['https://spreadsheets.google.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    return client
+    return gspread.authorize(creds)
 
 def get_sheet():
     client = get_sheets_client()
     return client.open_by_key(GOOGLE_SHEET_ID).worksheet("Log")
 
-# System prompt for Claude
 PARSING_SYSTEM_PROMPT = """You are an expense parser for an Indian couple (Mimansa and Digvijay).
 Extract expense information from messages in English/Hinglish and return ONLY valid JSON.
 
@@ -45,27 +55,20 @@ PAYMENT METHODS: Cash, Credit Card, UPI, Bank Transfer (default: UPI)
 HINGLISH CATEGORY MAPPINGS:
 - sabzi/kirana/vegetables → Groceries
 - petrol/fuel/diesel/cab/driving → Transport
-- khana/bhojan/dinner/lunch/zomato/swiggy/blinkit/khane → Dining Out
+- khana/bhojan/dinner/lunch/zomato/swiggy/blinkit → Dining Out
 - bijli/light bill/wifi/internet → Utilities
 - dawai/medicine/hospital/doctor → Healthcare
 - SIP/mutual fund/investment → SIP
 - CC bill/credit card bill → CC Payment
-- emi → EMI
-- insurance → Insurance
-- rent/bhada → Rent
-- subscription → Subscriptions
-- shopping/kapde/khareed → Shopping
-- entertainment/movie/games → Entertainment
-- salary/payment → Salary
-- loan → Education Loan
+- emi → EMI, insurance → Insurance, rent/bhada → Rent, subscription → Subscriptions
+- shopping/kapde/khareed → Shopping, entertainment/movie → Entertainment
+- salary/payment → Salary, loan → Education Loan
 
 EXAMPLES:
 - "rent 35000" → {person: "Both", category: "Rent", amount: 35000, description: "", payment_method: "UPI", is_expense: true}
 - "mimansa groceries 450 bigbasket" → {person: "Mimansa", category: "Groceries", amount: 450, description: "bigbasket", payment_method: "UPI", is_expense: true}
-- "digvijay petrol 1200 pump" → {person: "Digvijay", category: "Transport", amount: 1200, description: "pump", payment_method: "UPI", is_expense: true}
-- "dinner 800" → {person: "Both", category: "Dining Out", amount: 800, description: "", payment_method: "UPI", is_expense: true}
 
-RESPONSE FORMAT (ONLY return JSON, no other text):
+RESPONSE FORMAT (ONLY return JSON):
 {
     "person": "Mimansa|Digvijay|Both",
     "category": "Category Name",
@@ -75,17 +78,17 @@ RESPONSE FORMAT (ONLY return JSON, no other text):
     "is_expense": true
 }
 
-Always set is_expense to true if you can identify an amount and category, even if format is informal."""
+Always set is_expense to true if you can identify an amount and category."""
 
 ANALYSIS_SYSTEM_PROMPT = """You are a financial assistant for Mimansa and Digvijay (Indian couple).
-Analyze their expenses from the provided data and answer questions conversationally.
+Analyze their expenses and answer questions conversationally in the language asked.
 
-Monthly budgets for reference:
-Rent: 35000, EMI: 40000, Education Loan: 40000, Credit Card: 15000, Insurance: 5000,
-Subscriptions: 2000, Groceries: 15000, Utilities: 5000, Transport: 8000, Dining Out: 5000,
-Entertainment: 5000, Healthcare: 3000, Shopping: 5000, Education: 3000, Miscellaneous: 3000, SIP: 16000
+Monthly budgets: Rent: 35000, EMI: 40000, Education Loan: 40000, Credit Card: 15000,
+Insurance: 5000, Subscriptions: 2000, Groceries: 15000, Utilities: 5000, Transport: 8000,
+Dining Out: 5000, Entertainment: 5000, Healthcare: 3000, Shopping: 5000, Education: 3000,
+Miscellaneous: 3000, SIP: 16000
 
-Be conversational and use Hindi/Hinglish if the user asked in that language. Use ₹ symbol for currency."""
+Be conversational, use ₹ symbol, and reply in Hindi/Hinglish if asked in that language."""
 
 def parse_expense(message_text):
     """Use Claude to parse expense from message."""
@@ -103,14 +106,11 @@ def parse_expense(message_text):
 def get_analysis(question, sheet_data):
     """Use Claude to analyze expenses and answer questions."""
     context = "Recent expense data:\n" + json.dumps(sheet_data, indent=2, ensure_ascii=False)
-
     response = claude_client.messages.create(
         model="claude-opus-4-5",
         max_tokens=500,
         system=ANALYSIS_SYSTEM_PROMPT,
-        messages=[
-            {"role": "user", "content": f"{context}\n\nQuestion: {question}"}
-        ]
+        messages=[{"role": "user", "content": f"{context}\n\nQuestion: {question}"}]
     )
     return response.content[0].text
 
@@ -127,57 +127,110 @@ def log_to_sheets(parsed_expense):
         parsed_expense.get("description", ""),
         parsed_expense.get("amount", 0),
         parsed_expense.get("payment_method", "UPI"),
-        "",  # Notes (empty for now)
+        "",
         parsed_expense.get("person", "Both"),
         month_str
     ]
-
     sheet.append_row(row)
     return row
+
+async def log_and_confirm(update: Update, parsed_expense):
+    """Log expense and send confirmation."""
+    try:
+        log_to_sheets(parsed_expense)
+        confirmation = f"""✅ Logged!
+👤 {parsed_expense.get('person', 'Both')}
+🏷️ {parsed_expense.get('category', 'Miscellaneous')}
+💰 ₹{parsed_expense.get('amount', 0)}
+📝 {parsed_expense.get('description', '') or '—'}
+📅 {datetime.now().strftime('%d %b %Y')}"""
+        await update.message.reply_text(confirmation)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages."""
     message_text = update.message.text
     user_id = update.effective_user.id
 
-    # Check if we're waiting for delete confirmation
+    # Handle pending delete confirmation
     if user_id in context.user_data and context.user_data[user_id].get('pending_delete'):
-        if message_text.lower() == 'yes':
+        if message_text.lower() == 'confirm':
             try:
                 sheet = get_sheet()
-                # Delete the last row (skip header)
                 sheet.delete_rows(context.user_data[user_id]['delete_row_index'])
                 await update.message.reply_text("✅ Expense deleted!")
                 del context.user_data[user_id]['pending_delete']
                 del context.user_data[user_id]['delete_row_index']
                 return
             except Exception as e:
-                await update.message.reply_text(f"Error deleting: {str(e)}")
+                await update.message.reply_text(f"Error: {str(e)}")
                 return
         else:
             await update.message.reply_text("❌ Cancelled")
             del context.user_data[user_id]['pending_delete']
-            del context.user_data[user_id]['delete_row_index']
             return
 
-    # Check if we're waiting for a missing field
+    # Handle pending edit instruction
+    if user_id in context.user_data and context.user_data[user_id].get('pending_edit'):
+        try:
+            parts = message_text.strip().split(' ', 1)
+            if len(parts) != 2:
+                await update.message.reply_text("Format: **field value**\nExample: category Groceries")
+                return
+
+            field, new_value = parts[0].lower(), parts[1]
+            sheet = get_sheet()
+            row_index = context.user_data[user_id]['edit_row_index']
+
+            field_mapping = {
+                'person': 'Person',
+                'category': 'Category',
+                'amount': 'Amount (₹)',
+                'description': 'Description',
+                'payment': 'Payment Method'
+            }
+
+            if field not in field_mapping:
+                await update.message.reply_text("Field not found. Use: person, category, amount, description, or payment")
+                return
+
+            col_name = field_mapping[field]
+            if field == 'amount':
+                try:
+                    new_value = float(new_value)
+                except:
+                    await update.message.reply_text("Amount must be a number")
+                    return
+            elif field == 'category' and new_value not in VALID_CATEGORIES:
+                await update.message.reply_text(f"Invalid category. Use: {', '.join(VALID_CATEGORIES[:5])}...")
+                return
+
+            headers = sheet.row_values(1)
+            col_index = headers.index(col_name) + 1
+            sheet.update_cell(row_index, col_index, new_value)
+
+            await update.message.reply_text(f"✅ Updated! {col_name} → {new_value}")
+            del context.user_data[user_id]['pending_edit']
+            return
+        except Exception as e:
+            await update.message.reply_text(f"Error: {str(e)}")
+            del context.user_data[user_id]['pending_edit']
+            return
+
+    # Handle pending person field
     if user_id in context.user_data and 'pending_expense' in context.user_data[user_id]:
         pending = context.user_data[user_id]['pending_expense']
-        waiting_for = context.user_data[user_id].get('waiting_for')
+        if message_text.lower() in ['mimansa', 'digvijay', 'both']:
+            pending['person'] = message_text.capitalize()
+            await log_and_confirm(update, pending)
+            del context.user_data[user_id]['pending_expense']
+            return
+        else:
+            await update.message.reply_text("Please reply: Mimansa, Digvijay, or Both")
+            return
 
-        if waiting_for == 'person':
-            if message_text.lower() in ['mimansa', 'digvijay', 'both']:
-                pending['person'] = message_text.capitalize()
-                context.user_data[user_id]['pending_expense'] = pending
-                # All fields now complete, log it
-                await log_and_confirm(update, pending)
-                del context.user_data[user_id]['pending_expense']
-                return
-            else:
-                await update.message.reply_text("Please reply: Mimansa, Digvijay, or Both")
-                return
-
-    # Parse expense
+    # Parse as expense
     parsed = parse_expense(message_text)
 
     if not parsed.get("is_expense"):
@@ -185,91 +238,129 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             sheet = get_sheet()
             all_rows = sheet.get_all_records()
-            answer = get_analysis(message_text, all_rows[-20:] if len(all_rows) > 20 else all_rows)
+            answer = get_analysis(message_text, all_rows[-30:] if len(all_rows) > 30 else all_rows)
             await update.message.reply_text(answer)
         except Exception as e:
-            await update.message.reply_text("Sorry, couldn't understand. Try:\n- 'rent 35000'\n- 'mimansa groceries 450'\n- 'how much on dining?'")
+            await update.message.reply_text("Sorry, couldn't understand. Try:\n- 'rent 35000'\n- 'how much on groceries?'")
         return
 
-    # Check if person is "Both" (default) and wasn't explicitly mentioned
+    # Check if person is missing
     if parsed.get("person") == "Both" and not any(name.lower() in message_text.lower() for name in ['mimansa', 'digvijay']):
         await update.message.reply_text("Who paid - Mimansa, Digvijay, or Both?")
         if user_id not in context.user_data:
             context.user_data[user_id] = {}
         context.user_data[user_id]['pending_expense'] = parsed
-        context.user_data[user_id]['waiting_for'] = 'person'
         return
 
-    # All required fields present, log and confirm
+    # Log expense
     await log_and_confirm(update, parsed)
-
-async def log_and_confirm(update: Update, parsed_expense):
-    """Log expense and send confirmation."""
-    try:
-        row = log_to_sheets(parsed_expense)
-
-        # Send confirmation
-        confirmation = f"""✅ Logged!
-👤 {parsed_expense.get('person', 'Both')}
-🏷️ {parsed_expense.get('category', 'Miscellaneous')}
-💰 ₹{parsed_expense.get('amount', 0)}
-📝 {parsed_expense.get('description', '') or '—'}
-📅 {datetime.now().strftime('%d %b %Y')}"""
-
-        await update.message.reply_text(confirmation)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send welcome message."""
     welcome = """👋 Welcome to Expense Tracker!
 
-**How to log expenses:**
+**Log expenses:**
 - mimansa groceries 450 bigbasket
-- digvijay petrol 1200 hp pump
+- digvijay petrol 1200
 - rent 35000
-- dinner 800 parents ke saath
+- dinner 800
 
 **Commands:**
-/summary - Current month summary
-/budget - Budget vs actual
-/history - Recent expenses by person
+/history [n] - Last N expenses (default 10, max 30)
+/search <query> - Find expenses by keyword
+/today - Today's expenses
 /delete - Remove last expense
-/help - Show this message
+/edit <field> <value> - Edit last expense
+/categories - List all categories
+/help - This message
 
 **Ask questions:**
-- is mahine ka summary
+- how much on groceries?
 - mimansa ne kitna kharch kiya?
-- dining out this month
-"""
+- dining out this month"""
     await update.message.reply_text(welcome)
 
-async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get current month summary."""
+async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show recent expenses."""
     try:
+        args = update.message.text.split()
+        n = int(args[1]) if len(args) > 1 else 10
+        n = min(n, 30)
+
         sheet = get_sheet()
         all_rows = sheet.get_all_records()
-        answer = get_analysis("Is mahine ka summary do - total spend, category-wise breakdown, aur budget comparison", all_rows)
-        await update.message.reply_text(answer)
+
+        if not all_rows:
+            await update.message.reply_text("No expenses yet.")
+            return
+
+        recent = all_rows[-n:][::-1]
+        message = f"📝 **Last {len(recent)} Expenses**\n\n"
+
+        for exp in recent:
+            message += f"• {exp.get('Date', '')} | {exp.get('Person', '')} | {exp.get('Category', '')} | ₹{exp.get('Amount (₹)', '0')} | {exp.get('Description', '') or '—'}\n"
+
+        await update.message.reply_text(message, parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
-async def budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get budget vs actual."""
+async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Search expenses by keyword."""
     try:
+        query = ' '.join(update.message.text.split()[1:]).lower()
+        if not query:
+            await update.message.reply_text("Usage: /search <keyword>")
+            return
+
         sheet = get_sheet()
         all_rows = sheet.get_all_records()
-        answer = get_analysis("Show budget vs actual spending for this month, category-wise. Highlight categories where we exceeded budget.", all_rows)
-        await update.message.reply_text(answer)
+
+        matches = [r for r in all_rows if query in str(r.get('Category', '')).lower()
+                   or query in str(r.get('Description', '')).lower()
+                   or query in str(r.get('Person', '')).lower()]
+
+        if not matches:
+            await update.message.reply_text(f"No expenses found for '{query}'")
+            return
+
+        total = sum(float(r.get('Amount (₹)', 0)) for r in matches)
+        message = f"🔍 **Found {len(matches)} entries** | Total: ₹{total}\n\n"
+
+        for exp in matches[-15:][::-1]:
+            message += f"• {exp.get('Date', '')} | {exp.get('Person', '')} | {exp.get('Category', '')} | ₹{exp.get('Amount (₹)', '0')}\n"
+
+        if len(matches) > 15:
+            message += f"\n... and {len(matches) - 15} more"
+
+        await update.message.reply_text(message, parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show help."""
-    await start(update, context)
+async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show today's expenses."""
+    try:
+        today_str = datetime.now().strftime("%d %b %Y")
+        sheet = get_sheet()
+        all_rows = sheet.get_all_records()
 
-async def delete_last(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Delete the last logged expense."""
+        today_expenses = [r for r in all_rows if r.get('Date', '') == today_str]
+
+        if not today_expenses:
+            await update.message.reply_text(f"No expenses logged today ({today_str})")
+            return
+
+        total = sum(float(r.get('Amount (₹)', 0)) for r in today_expenses)
+        message = f"📅 **Today's Expenses** ({today_str})\n**Total: ₹{total}**\n\n"
+
+        for exp in today_expenses:
+            message += f"• {exp.get('Person', '')} | {exp.get('Category', '')} | ₹{exp.get('Amount (₹)', '0')} | {exp.get('Description', '') or '—'}\n"
+
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete last expense."""
     try:
         sheet = get_sheet()
         all_rows = sheet.get_all_records()
@@ -278,91 +369,95 @@ async def delete_last(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No expenses to delete.")
             return
 
-        # Get last row
         last_row = all_rows[-1]
+        user_id = update.effective_user.id
 
-        # Show what will be deleted
-        confirm_msg = f"""🗑️ Delete this expense?
+        msg = f"""🗑️ Delete this expense?
 
 👤 {last_row.get('Person', '')}
 🏷️ {last_row.get('Category', '')}
 💰 ₹{last_row.get('Amount (₹)', '0')}
 📝 {last_row.get('Description', '') or '—'}
-📅 {last_row.get('Date', '')}
 
-Reply: **yes** to confirm, anything else to cancel"""
+Reply: **confirm** to delete"""
 
-        await update.message.reply_text(confirm_msg, parse_mode='Markdown')
+        await update.message.reply_text(msg, parse_mode='Markdown')
 
-        # Store in context to wait for confirmation
-        user_id = update.effective_user.id
         if user_id not in context.user_data:
             context.user_data[user_id] = {}
         context.user_data[user_id]['pending_delete'] = True
-        context.user_data[user_id]['delete_row_index'] = len(all_rows)  # 1-indexed
+        context.user_data[user_id]['delete_row_index'] = len(all_rows)
 
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
-async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show recent expenses."""
+async def edit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Edit last expense."""
     try:
         sheet = get_sheet()
         all_rows = sheet.get_all_records()
 
         if not all_rows:
-            await update.message.reply_text("No expenses logged yet.")
+            await update.message.reply_text("No expenses to edit.")
             return
 
-        # Get last 15 expenses
-        recent = all_rows[-15:][::-1]
+        last_row = all_rows[-1]
+        user_id = update.effective_user.id
 
-        # Format by person
-        mimansa_expenses = [r for r in recent if r.get('Person') == 'Mimansa']
-        digvijay_expenses = [r for r in recent if r.get('Person') == 'Digvijay']
-        both_expenses = [r for r in recent if r.get('Person') == 'Both']
+        msg = f"""✏️ Edit last expense:
 
-        message = "📝 **Recent Expenses**\n\n"
+👤 Person: {last_row.get('Person', '')}
+🏷️ Category: {last_row.get('Category', '')}
+💰 Amount: ₹{last_row.get('Amount (₹)', '0')}
+📝 Description: {last_row.get('Description', '') or '—'}
 
-        if mimansa_expenses:
-            message += f"👩 **Mimansa** ({len(mimansa_expenses)})\n"
-            for exp in mimansa_expenses[:5]:
-                message += f"  • {exp.get('Date', '')} - {exp.get('Category', '')} - ₹{exp.get('Amount (₹)', '0')}\n"
-            if len(mimansa_expenses) > 5:
-                message += f"  ... and {len(mimansa_expenses) - 5} more\n"
-            message += "\n"
+Reply: **field value**
+Example: "category Groceries" or "amount 500" """
 
-        if digvijay_expenses:
-            message += f"👨 **Digvijay** ({len(digvijay_expenses)})\n"
-            for exp in digvijay_expenses[:5]:
-                message += f"  • {exp.get('Date', '')} - {exp.get('Category', '')} - ₹{exp.get('Amount (₹)', '0')}\n"
-            if len(digvijay_expenses) > 5:
-                message += f"  ... and {len(digvijay_expenses) - 5} more\n"
-            message += "\n"
+        await update.message.reply_text(msg, parse_mode='Markdown')
 
-        if both_expenses:
-            message += f"👥 **Both** ({len(both_expenses)})\n"
-            for exp in both_expenses[:5]:
-                message += f"  • {exp.get('Date', '')} - {exp.get('Category', '')} - ₹{exp.get('Amount (₹)', '0')}\n"
-            if len(both_expenses) > 5:
-                message += f"  ... and {len(both_expenses) - 5} more\n"
+        if user_id not in context.user_data:
+            context.user_data[user_id] = {}
+        context.user_data[user_id]['pending_edit'] = True
+        context.user_data[user_id]['edit_row_index'] = len(all_rows)
 
-        await update.message.reply_text(message, parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
+async def categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show all valid categories."""
+    fixed = ["Salary", "Rent", "EMI", "Education Loan", "Credit Card", "Insurance", "Subscriptions", "SIP"]
+    variable = ["Groceries", "Utilities", "Transport", "Dining Out", "Entertainment", "Healthcare", "Shopping", "Education", "Miscellaneous", "CC Payment"]
+
+    msg = """📊 **Expense Categories**
+
+**Fixed:**
+""" + ", ".join(fixed) + """
+
+**Variable:**
+""" + ", ".join(variable)
+
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show help."""
+    await start(update, context)
+
 def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    request = HTTPXRequest(connect_timeout=30, read_timeout=30, write_timeout=30)
+    app = Application.builder().token(TELEGRAM_TOKEN).request(request).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("summary", summary))
-    app.add_handler(CommandHandler("budget", budget))
     app.add_handler(CommandHandler("history", history))
-    app.add_handler(CommandHandler("delete", delete_last))
+    app.add_handler(CommandHandler("search", search))
+    app.add_handler(CommandHandler("today", today_cmd))
+    app.add_handler(CommandHandler("delete", delete_cmd))
+    app.add_handler(CommandHandler("edit", edit_cmd))
+    app.add_handler(CommandHandler("categories", categories))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("🤖 Bot started! Listening for messages...")
+    print("🤖 Bot started!")
     app.run_polling()
 
 if __name__ == "__main__":
