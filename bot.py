@@ -213,6 +213,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 **Commands:**
 /summary - Current month summary
 /budget - Budget vs actual
+/history - Recent expenses by person
 /help - Show this message
 
 **Ask questions:**
@@ -246,12 +247,60 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show help."""
     await start(update, context)
 
+async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show recent expenses."""
+    try:
+        sheet = get_sheet()
+        all_rows = sheet.get_all_records()
+
+        if not all_rows:
+            await update.message.reply_text("No expenses logged yet.")
+            return
+
+        # Get last 15 expenses
+        recent = all_rows[-15:][::-1]
+
+        # Format by person
+        mimansa_expenses = [r for r in recent if r.get('Person') == 'Mimansa']
+        digvijay_expenses = [r for r in recent if r.get('Person') == 'Digvijay']
+        both_expenses = [r for r in recent if r.get('Person') == 'Both']
+
+        message = "📝 **Recent Expenses**\n\n"
+
+        if mimansa_expenses:
+            message += f"👩 **Mimansa** ({len(mimansa_expenses)})\n"
+            for exp in mimansa_expenses[:5]:
+                message += f"  • {exp.get('Date', '')} - {exp.get('Category', '')} - ₹{exp.get('Amount (₹)', '0')}\n"
+            if len(mimansa_expenses) > 5:
+                message += f"  ... and {len(mimansa_expenses) - 5} more\n"
+            message += "\n"
+
+        if digvijay_expenses:
+            message += f"👨 **Digvijay** ({len(digvijay_expenses)})\n"
+            for exp in digvijay_expenses[:5]:
+                message += f"  • {exp.get('Date', '')} - {exp.get('Category', '')} - ₹{exp.get('Amount (₹)', '0')}\n"
+            if len(digvijay_expenses) > 5:
+                message += f"  ... and {len(digvijay_expenses) - 5} more\n"
+            message += "\n"
+
+        if both_expenses:
+            message += f"👥 **Both** ({len(both_expenses)})\n"
+            for exp in both_expenses[:5]:
+                message += f"  • {exp.get('Date', '')} - {exp.get('Category', '')} - ₹{exp.get('Amount (₹)', '0')}\n"
+            if len(both_expenses) > 5:
+                message += f"  ... and {len(both_expenses) - 5} more\n"
+
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("summary", summary))
     app.add_handler(CommandHandler("budget", budget))
+    app.add_handler(CommandHandler("history", history))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
