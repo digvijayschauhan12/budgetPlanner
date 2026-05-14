@@ -99,8 +99,13 @@ def parse_expense(message_text):
             system=PARSING_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": message_text}]
         )
-        text = response.content[0].text
-        print(f"[Claude Response] {text}")
+        text = response.content[0].text.strip()
+        # Remove markdown code blocks if present
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:].lstrip("\n")
+            text = text.split("```")[0]
         return json.loads(text)
     except Exception as e:
         print(f"[Parse Error] {e}")
