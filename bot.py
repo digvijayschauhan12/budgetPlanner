@@ -138,6 +138,24 @@ def log_to_sheets(parsed_expense):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages."""
     message_text = update.message.text
+    user_id = update.effective_user.id
+
+    # Check if we're waiting for a missing field
+    if user_id in context.user_data and 'pending_expense' in context.user_data[user_id]:
+        pending = context.user_data[user_id]['pending_expense']
+        waiting_for = context.user_data[user_id].get('waiting_for')
+
+        if waiting_for == 'person':
+            if message_text.lower() in ['mimansa', 'digvijay', 'both']:
+                pending['person'] = message_text.capitalize()
+                context.user_data[user_id]['pending_expense'] = pending
+                # All fields now complete, log it
+                await log_and_confirm(update, pending)
+                del context.user_data[user_id]['pending_expense']
+                return
+            else:
+                await update.message.reply_text("Please reply: Mimansa, Digvijay, or Both")
+                return
 
     # Parse expense
     parsed = parse_expense(message_text)
@@ -150,24 +168,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             answer = get_analysis(message_text, all_rows[-20:] if len(all_rows) > 20 else all_rows)
             await update.message.reply_text(answer)
         except Exception as e:
-            await update.message.reply_text("Sorry, couldn't understand. Try:\n- 'mimansa groceries 450 bigbasket'\n- 'how much did we spend on dining?'")
+            await update.message.reply_text("Sorry, couldn't understand. Try:\n- 'rent 35000'\n- 'mimansa groceries 450'\n- 'how much on dining?'")
         return
 
-    # Log to sheets
+    # Check if person is "Both" (default) and wasn't explicitly mentioned
+    if parsed.get("person") == "Both" and not any(name.lower() in message_text.lower() for name in ['mimansa', 'digvijay']):
+        await update.message.reply_text("Who paid - Mimansa, Digvijay, or Both?")
+        if user_id not in context.user_data:
+            context.user_data[user_id] = {}
+        context.user_data[user_id]['pending_expense'] = parsed
+        context.user_data[user_id]['waiting_for'] = 'person'
+        return
+
+    # All required fields present, log and confirm
+    await log_and_confirm(update, parsed)
+
+async def log_and_confirm(update: Update, parsed_expense):
+    """Log expense and send confirmation."""
     try:
-        row = log_to_sheets(parsed)
+        row = log_to_sheets(parsed_expense)
 
         # Send confirmation
         confirmation = f"""✅ Logged!
-👤 {parsed.get('person', 'Both')}
-🏷️ {parsed.get('category', 'Miscellaneous')}
-💰 ₹{parsed.get('amount', 0)}
-📝 {parsed.get('description', '')}
+👤 {parsed_expense.get('person', 'Both')}
+🏷️ {parsed_expense.get('category', 'Miscellaneous')}
+💰 ₹{parsed_expense.get('amount', 0)}
+📝 {parsed_expense.get('description', '') or '—'}
 📅 {datetime.now().strftime('%d %b %Y')}"""
 
         await update.message.reply_text(confirmation)
     except Exception as e:
-        await update.message.reply_text(f"Error logging expense: {str(e)}")
+        await update.message.reply_text(f"Error: {str(e)}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send welcome message."""
