@@ -138,7 +138,10 @@ async def log_and_confirm(update: Update, parsed_expense):
 📅 {datetime.now().strftime('%d %b %Y')}"""
         await update.message.reply_text(confirmation)
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        print(f"[SHEETS ERROR] {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        await update.message.reply_text(f"Sheets Error: {str(e)}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages."""
