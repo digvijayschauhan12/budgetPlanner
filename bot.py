@@ -140,6 +140,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = update.message.text
     user_id = update.effective_user.id
 
+    # Check if we're waiting for delete confirmation
+    if user_id in context.user_data and context.user_data[user_id].get('pending_delete'):
+        if message_text.lower() == 'yes':
+            try:
+                sheet = get_sheet()
+                # Delete the last row (skip header)
+                sheet.delete_rows(context.user_data[user_id]['delete_row_index'])
+                await update.message.reply_text("✅ Expense deleted!")
+                del context.user_data[user_id]['pending_delete']
+                del context.user_data[user_id]['delete_row_index']
+                return
+            except Exception as e:
+                await update.message.reply_text(f"Error deleting: {str(e)}")
+                return
+        else:
+            await update.message.reply_text("❌ Cancelled")
+            del context.user_data[user_id]['pending_delete']
+            del context.user_data[user_id]['delete_row_index']
+            return
+
     # Check if we're waiting for a missing field
     if user_id in context.user_data and 'pending_expense' in context.user_data[user_id]:
         pending = context.user_data[user_id]['pending_expense']
@@ -214,6 +234,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /summary - Current month summary
 /budget - Budget vs actual
 /history - Recent expenses by person
+/delete - Remove last expense
 /help - Show this message
 
 **Ask questions:**
@@ -246,6 +267,42 @@ async def budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show help."""
     await start(update, context)
+
+async def delete_last(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete the last logged expense."""
+    try:
+        sheet = get_sheet()
+        all_rows = sheet.get_all_records()
+
+        if not all_rows:
+            await update.message.reply_text("No expenses to delete.")
+            return
+
+        # Get last row
+        last_row = all_rows[-1]
+
+        # Show what will be deleted
+        confirm_msg = f"""🗑️ Delete this expense?
+
+👤 {last_row.get('Person', '')}
+🏷️ {last_row.get('Category', '')}
+💰 ₹{last_row.get('Amount (₹)', '0')}
+📝 {last_row.get('Description', '') or '—'}
+📅 {last_row.get('Date', '')}
+
+Reply: **yes** to confirm, anything else to cancel"""
+
+        await update.message.reply_text(confirm_msg, parse_mode='Markdown')
+
+        # Store in context to wait for confirmation
+        user_id = update.effective_user.id
+        if user_id not in context.user_data:
+            context.user_data[user_id] = {}
+        context.user_data[user_id]['pending_delete'] = True
+        context.user_data[user_id]['delete_row_index'] = len(all_rows)  # 1-indexed
+
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show recent expenses."""
@@ -301,6 +358,7 @@ def main():
     app.add_handler(CommandHandler("summary", summary))
     app.add_handler(CommandHandler("budget", budget))
     app.add_handler(CommandHandler("history", history))
+    app.add_handler(CommandHandler("delete", delete_last))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
