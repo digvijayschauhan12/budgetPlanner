@@ -41,44 +41,20 @@ def get_sheet():
     client = get_sheets_client()
     return client.open_by_key(GOOGLE_SHEET_ID).worksheet("Log")
 
-PARSING_SYSTEM_PROMPT = """You are an expense parser for an Indian couple (Mimansa and Digvijay).
-Extract expense information from messages in English/Hinglish and return ONLY valid JSON.
+PARSING_SYSTEM_PROMPT = """Parse expense. Return ONLY JSON, no other text.
 
-PERSONS: Mimansa, Digvijay, Both (default if no name mentioned)
+Rules:
+1. Person: Mimansa, Digvijay, or Both (default: Both if no name)
+2. Category: Use EXACTLY one of: Salary, Rent, EMI, Education Loan, Credit Card, Insurance, Subscriptions, Groceries, Utilities, Transport, Dining Out, Entertainment, Healthcare, Shopping, Education, Miscellaneous, SIP, CC Payment
+3. Amount: Extract the number
+4. Payment: UPI (default), Cash, Credit Card, Bank Transfer
+5. Description: Any other text mentioned
+6. is_expense: Always true if amount exists
 
-CATEGORIES (use EXACTLY these):
-Salary, Rent, EMI, Education Loan, Credit Card, Insurance, Subscriptions, Groceries, Utilities, Transport,
-Dining Out, Entertainment, Healthcare, Shopping, Education, Miscellaneous, SIP, CC Payment
+Hinglish: rent/bhada→Rent, sabzi/kirana→Groceries, petrol/fuel→Transport, khana/dinner→Dining Out, bijli/wifi→Utilities, dawai/doctor→Healthcare, SIP/investment→SIP
 
-PAYMENT METHODS: Cash, Credit Card, UPI, Bank Transfer (default: UPI)
-
-HINGLISH CATEGORY MAPPINGS:
-- sabzi/kirana/vegetables → Groceries
-- petrol/fuel/diesel/cab/driving → Transport
-- khana/bhojan/dinner/lunch/zomato/swiggy/blinkit → Dining Out
-- bijli/light bill/wifi/internet → Utilities
-- dawai/medicine/hospital/doctor → Healthcare
-- SIP/mutual fund/investment → SIP
-- CC bill/credit card bill → CC Payment
-- emi → EMI, insurance → Insurance, rent/bhada → Rent, subscription → Subscriptions
-- shopping/kapde/khareed → Shopping, entertainment/movie → Entertainment
-- salary/payment → Salary, loan → Education Loan
-
-EXAMPLES:
-- "rent 35000" → {person: "Both", category: "Rent", amount: 35000, description: "", payment_method: "UPI", is_expense: true}
-- "mimansa groceries 450 bigbasket" → {person: "Mimansa", category: "Groceries", amount: 450, description: "bigbasket", payment_method: "UPI", is_expense: true}
-
-RESPONSE FORMAT (ONLY return JSON):
-{
-    "person": "Mimansa|Digvijay|Both",
-    "category": "Category Name",
-    "amount": number,
-    "description": "description or empty string",
-    "payment_method": "UPI|Cash|Credit Card|Bank Transfer",
-    "is_expense": true
-}
-
-Always set is_expense to true if you can identify an amount and category."""
+Return JSON only:
+{"person": "Both", "category": "Rent", "amount": 35000, "description": "", "payment_method": "UPI", "is_expense": true}"""
 
 ANALYSIS_SYSTEM_PROMPT = """You are a financial assistant for Mimansa and Digvijay (Indian couple).
 Analyze their expenses and answer questions conversationally in the language asked.
