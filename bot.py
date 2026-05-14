@@ -222,6 +222,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Parse as expense
     parsed = parse_expense(message_text)
+    await update.message.reply_text(f"[DEBUG] Parsed: {parsed}")
 
     if not parsed.get("is_expense"):
         # Try to answer as a question
